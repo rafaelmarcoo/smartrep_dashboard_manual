@@ -1,9 +1,9 @@
-import { runAvailabilitySync } from "@/lib/sync-availability";
+import { getDashboardData } from "@/lib/dashboard-data";
 
-export async function POST() {
+export async function GET() {
   try {
-    const result = await runAvailabilitySync();
-    return Response.json(result);
+    const data = await getDashboardData();
+    return Response.json({ ok: true, ...data });
   } catch (error) {
     console.error(error);
 
