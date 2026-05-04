@@ -1,7 +1,7 @@
 import { supabasePublic } from "@/lib/supabase-public";
 
 async function getData() {
-  const [{ data: equipment }, { data: activeSessions }, { data: completedSessions }] =
+  const [equipmentResult, activeSessionsResult, completedSessionsResult] =
     await Promise.all([
       supabasePublic
         .from("equipment_status")
@@ -20,10 +20,24 @@ async function getData() {
         .limit(10),
     ]);
 
+  if (equipmentResult.error) {
+    throw new Error(`Failed to load equipment status: ${equipmentResult.error.message}`);
+  }
+
+  if (activeSessionsResult.error) {
+    throw new Error(`Failed to load active sessions: ${activeSessionsResult.error.message}`);
+  }
+
+  if (completedSessionsResult.error) {
+    throw new Error(
+      `Failed to load completed sessions: ${completedSessionsResult.error.message}`
+    );
+  }
+
   return {
-    equipment: equipment ?? [],
-    activeSessions: activeSessions ?? [],
-    completedSessions: completedSessions ?? [],
+    equipment: equipmentResult.data ?? [],
+    activeSessions: activeSessionsResult.data ?? [],
+    completedSessions: completedSessionsResult.data ?? [],
   };
 }
 

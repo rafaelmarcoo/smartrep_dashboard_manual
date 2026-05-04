@@ -3,10 +3,22 @@ import {
   getHistoricalSessionEvents,
   getLatestAvailability,
   getPi1DeviceId,
+  getSessionEventKeys,
 } from "./thingsboard";
 
 type TbValue = { ts: number; value: string };
 type TbLatestResponse = Record<string, TbValue[] | undefined>;
+type TelemetryGroup = { ts: number; values: Record<string, string> };
+type SyncStateRow = { last_ts_ms: number };
+type EquipmentStatusRow = {
+  equipment_name: string;
+  current_status: string;
+  last_changed_at: string;
+  updated_at: string;
+  source_device: string;
+};
+
+const SESSION_HISTORY_LIMIT = 1000;
 
 const EQUIPMENT_KEYS = ["dumbbell_left", "dumbbell_right", "foam_roller", "chair"];
 
@@ -32,9 +44,58 @@ function groupTelemetryByTimestamp(payload: Record<string, TbValue[] | undefined
     .sort((a, b) => a.ts - b.ts);
 }
 
+function getLatestProcessedTimestamp(groupedEvents: TelemetryGroup[]) {
+  if (groupedEvents.length === 0) return null;
+  return groupedEvents[groupedEvents.length - 1]?.ts ?? null;
+}
+
+function isEquipmentStatusRow(
+  row: EquipmentStatusRow | null
+): row is EquipmentStatusRow {
+  return row !== null;
+}
+
+function hasMoreHistoricalData(payload: Record<string, TbValue[] | undefined>) {
+  return getSessionEventKeys().some((key) => {
+    const values = payload[key];
+    return Array.isArray(values) && values.length >= SESSION_HISTORY_LIMIT;
+  });
+}
+
+async function fetchHistoricalSessionEvents(startTs: number, endTs: number) {
+  const allEvents: TelemetryGroup[] = [];
+  let cursor = startTs;
+
+  while (cursor <= endTs) {
+    const historical = (await getHistoricalSessionEvents(
+      cursor,
+      endTs
+    )) as Record<string, TbValue[] | undefined>;
+
+    const groupedEvents = groupTelemetryByTimestamp(historical);
+
+    if (groupedEvents.length === 0) {
+      return allEvents;
+    }
+
+    allEvents.push(...groupedEvents);
+
+    const latestTimestamp = getLatestProcessedTimestamp(groupedEvents);
+
+    if (latestTimestamp === null || !hasMoreHistoricalData(historical)) {
+      return allEvents;
+    }
+
+    // Advance by 1 ms so we continue from the next batch without duplicating rows.
+    cursor = latestTimestamp + 1;
+  }
+
+  return allEvents;
+}
+
 async function upsertEquipmentStatus(latest: TbLatestResponse) {
   const rows = EQUIPMENT_KEYS
-    .map((equipment_name) => {
+    .map<EquipmentStatusRow | null>((equipment_name) => {
       const item = latestValue(latest[equipment_name]);
       if (!item) return null;
 
@@ -46,7 +107,7 @@ async function upsertEquipmentStatus(latest: TbLatestResponse) {
         source_device: "SmartRep-Pi1-Sensor",
       };
     })
-    .filter(Boolean);
+    .filter(isEquipmentStatusRow);
 
   if (rows.length === 0) return;
 
@@ -55,6 +116,29 @@ async function upsertEquipmentStatus(latest: TbLatestResponse) {
     .upsert(rows, { onConflict: "equipment_name" });
 
   if (error) throw error;
+}
+
+async function upsertEquipmentAvailabilityStatus(
+  equipment: string,
+  currentStatus: "occupied" | "available",
+  sessionId: string,
+  changedAt: string
+) {
+  const { error: statusError } = await supabaseAdmin
+    .from("equipment_status")
+    .upsert(
+      {
+        equipment_name: equipment,
+        current_status: currentStatus,
+        latest_session_id: sessionId,
+        last_changed_at: changedAt,
+        updated_at: new Date().toISOString(),
+        source_device: "SmartRep-Pi1-Sensor",
+      },
+      { onConflict: "equipment_name" }
+    );
+
+  if (statusError) throw statusError;
 }
 
 async function applySessionEvent(ts: number, values: Record<string, string>) {
@@ -69,12 +153,14 @@ async function applySessionEvent(ts: number, values: Record<string, string>) {
     _ts_iso: new Date(ts).toISOString(),
   };
 
-  await supabaseAdmin.from("raw_telemetry_log").insert({
+  const { error: rawInsertError } = await supabaseAdmin.from("raw_telemetry_log").insert({
     source_device: "SmartRep-Pi1-Sensor",
     tb_entity_id: getPi1DeviceId(),
     ts_ms: ts,
     payload: rawPayload,
   });
+
+  if (rawInsertError) throw rawInsertError;
 
   if (event === "session_start") {
     const startedAt = values.start_time ?? new Date(ts).toISOString();
@@ -94,22 +180,12 @@ async function applySessionEvent(ts: number, values: Record<string, string>) {
       );
 
     if (error) throw error;
-
-    const { error: statusError } = await supabaseAdmin
-      .from("equipment_status")
-      .upsert(
-        {
-          equipment_name: equipment,
-          current_status: "occupied",
-          latest_session_id: sessionId,
-          last_changed_at: startedAt,
-          updated_at: new Date().toISOString(),
-          source_device: "SmartRep-Pi1-Sensor",
-        },
-        { onConflict: "equipment_name" }
-      );
-
-    if (statusError) throw statusError;
+    await upsertEquipmentAvailabilityStatus(
+      equipment,
+      "occupied",
+      sessionId,
+      startedAt
+    );
   }
 
   if (event === "session_end") {
@@ -119,7 +195,7 @@ async function applySessionEvent(ts: number, values: Record<string, string>) {
       ? Number(values.session_duration_s)
       : null;
 
-    const { error } = await supabaseAdmin
+    const { data: updatedRows, error } = await supabaseAdmin
       .from("equipment_sessions")
       .update({
         ended_at: endedAt,
@@ -128,26 +204,50 @@ async function applySessionEvent(ts: number, values: Record<string, string>) {
         session_status: "completed",
         updated_at: new Date().toISOString(),
       })
-      .eq("external_session_id", sessionId);
+      .eq("external_session_id", sessionId)
+      .select("external_session_id");
 
     if (error) throw error;
 
-    const { error: statusError } = await supabaseAdmin
-      .from("equipment_status")
-      .upsert(
-        {
-          equipment_name: equipment,
-          current_status: "available",
-          latest_session_id: sessionId,
-          last_changed_at: endedAt,
-          updated_at: new Date().toISOString(),
-          source_device: "SmartRep-Pi1-Sensor",
-        },
-        { onConflict: "equipment_name" }
-      );
+    if (!updatedRows || updatedRows.length === 0) {
+      const { error: upsertError } = await supabaseAdmin
+        .from("equipment_sessions")
+        .upsert(
+          {
+            external_session_id: sessionId,
+            equipment_name: equipment,
+            started_at: startedAt,
+            ended_at: endedAt,
+            duration_seconds: durationSeconds,
+            session_status: "completed",
+            source_device: "SmartRep-Pi1-Sensor",
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "external_session_id" }
+        );
 
-    if (statusError) throw statusError;
+      if (upsertError) throw upsertError;
+    }
+
+    await upsertEquipmentAvailabilityStatus(
+      equipment,
+      "available",
+      sessionId,
+      endedAt
+    );
   }
+}
+
+async function updateSyncState(lastTsMs: number) {
+  const { error: syncWriteError } = await supabaseAdmin
+    .from("sync_state")
+    .update({
+      last_ts_ms: lastTsMs,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("sync_name", "availability_pi1");
+
+  if (syncWriteError) throw syncWriteError;
 }
 
 export async function runAvailabilitySync() {
@@ -157,7 +257,7 @@ export async function runAvailabilitySync() {
     .from("sync_state")
     .select("last_ts_ms")
     .eq("sync_name", "availability_pi1")
-    .single();
+    .single<SyncStateRow>();
 
   if (syncReadError) throw syncReadError;
 
@@ -166,26 +266,18 @@ export async function runAvailabilitySync() {
   const latest = await getLatestAvailability();
   await upsertEquipmentStatus(latest);
 
-  const historical = await getHistoricalSessionEvents(lastTs, now);
-  const groupedEvents = groupTelemetryByTimestamp(historical);
+  const groupedEvents = await fetchHistoricalSessionEvents(lastTs, now);
 
   for (const row of groupedEvents) {
     await applySessionEvent(row.ts, row.values);
   }
 
-  const { error: syncWriteError } = await supabaseAdmin
-    .from("sync_state")
-    .update({
-      last_ts_ms: now,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("sync_name", "availability_pi1");
-
-  if (syncWriteError) throw syncWriteError;
+  const latestProcessedTs = getLatestProcessedTimestamp(groupedEvents);
+  await updateSyncState(latestProcessedTs ?? now);
 
   return {
     ok: true,
-    synced_until: now,
+    synced_until: latestProcessedTs ?? now,
     event_count: groupedEvents.length,
   };
 }

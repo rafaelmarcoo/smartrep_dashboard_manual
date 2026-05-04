@@ -2,6 +2,15 @@ const TB_BASE_URL = process.env.TB_BASE_URL!;
 const TB_API_KEY = process.env.TB_API_KEY!;
 const TB_PI1_DEVICE_ID = process.env.TB_PI1_DEVICE_ID!;
 
+const SESSION_EVENT_KEYS = [
+  "event",
+  "equipment",
+  "session_id",
+  "start_time",
+  "end_time",
+  "session_duration_s",
+] as const;
+
 function tbHeaders() {
   return {
     "Content-Type": "application/json",
@@ -35,14 +44,7 @@ export async function getLatestAvailability() {
 }
 
 export async function getHistoricalSessionEvents(startTs: number, endTs: number) {
-  const keys = [
-    "event",
-    "equipment",
-    "session_id",
-    "start_time",
-    "end_time",
-    "session_duration_s",
-  ].join(",");
+  const keys = SESSION_EVENT_KEYS.join(",");
 
   const url =
     `${TB_BASE_URL}/api/plugins/telemetry/DEVICE/${TB_PI1_DEVICE_ID}` +
@@ -64,4 +66,8 @@ export async function getHistoricalSessionEvents(startTs: number, endTs: number)
 
 export function getPi1DeviceId() {
   return TB_PI1_DEVICE_ID;
+}
+
+export function getSessionEventKeys() {
+  return [...SESSION_EVENT_KEYS];
 }
