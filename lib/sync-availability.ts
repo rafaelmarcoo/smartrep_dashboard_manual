@@ -21,6 +21,8 @@ type EquipmentStatusRow = {
 const SESSION_HISTORY_LIMIT = 1000;
 
 const EQUIPMENT_KEYS = ["dumbbell_left", "dumbbell_right", "foam_roller", "chair"];
+const SHARED_DUMBBELL_SESSION = "dumbbell_pair";
+const SHARED_DUMBBELL_MEMBERS = ["dumbbell_left", "dumbbell_right"] as const;
 
 function latestValue(values?: TbValue[]) {
   if (!values || values.length === 0) return null;
@@ -141,6 +143,20 @@ async function upsertEquipmentAvailabilityStatus(
   if (statusError) throw statusError;
 }
 
+async function upsertSharedDumbbellAvailabilityStatus(
+  currentStatus: "occupied" | "available",
+  sessionId: string,
+  changedAt: string
+) {
+  // The Pi now emits one shared workout session for both dumbbells,
+  // so we stamp the same session id onto the left/right status rows.
+  await Promise.all(
+    SHARED_DUMBBELL_MEMBERS.map((equipment) =>
+      upsertEquipmentAvailabilityStatus(equipment, currentStatus, sessionId, changedAt)
+    )
+  );
+}
+
 async function applySessionEvent(ts: number, values: Record<string, string>) {
   const event = values.event;
   const equipment = values.equipment;
@@ -180,12 +196,16 @@ async function applySessionEvent(ts: number, values: Record<string, string>) {
       );
 
     if (error) throw error;
-    await upsertEquipmentAvailabilityStatus(
-      equipment,
-      "occupied",
-      sessionId,
-      startedAt
-    );
+    if (equipment === SHARED_DUMBBELL_SESSION) {
+      await upsertSharedDumbbellAvailabilityStatus("occupied", sessionId, startedAt);
+    } else {
+      await upsertEquipmentAvailabilityStatus(
+        equipment,
+        "occupied",
+        sessionId,
+        startedAt
+      );
+    }
   }
 
   if (event === "session_end") {
@@ -229,12 +249,16 @@ async function applySessionEvent(ts: number, values: Record<string, string>) {
       if (upsertError) throw upsertError;
     }
 
-    await upsertEquipmentAvailabilityStatus(
-      equipment,
-      "available",
-      sessionId,
-      endedAt
-    );
+    if (equipment === SHARED_DUMBBELL_SESSION) {
+      await upsertSharedDumbbellAvailabilityStatus("available", sessionId, endedAt);
+    } else {
+      await upsertEquipmentAvailabilityStatus(
+        equipment,
+        "available",
+        sessionId,
+        endedAt
+      );
+    }
   }
 }
 

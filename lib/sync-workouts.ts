@@ -139,6 +139,8 @@ async function applyWorkoutEvent(ts: number, values: Record<string, string>) {
 
   const { error } = await supabaseAdmin.from("workout_sessions").upsert(
     {
+      // The Pi camera now publishes the same shared session id that the
+      // dumbbell sensors opened, so workout_sessions lines up with equipment_sessions.
       external_session_id: values.session_id,
       exercise: values.exercise,
       sets: parseInteger(values.sets),
