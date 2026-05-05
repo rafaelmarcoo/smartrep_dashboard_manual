@@ -16,13 +16,33 @@ export type CompletedSession = {
   duration_seconds: string | number | null;
 };
 
+export type WorkoutSession = {
+  id: string;
+  external_session_id: string;
+  exercise: string;
+  sets: number | null;
+  reps_per_set: string | number | boolean | Record<string, unknown> | unknown[] | null;
+  bad_reps: number | null;
+  form_score: number | string | null;
+  coaching_summary: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+};
+
 export type DashboardData = {
   completedSessions: CompletedSession[];
   equipment: EquipmentStatus[];
+  latestWorkout: WorkoutSession | null;
+  recentWorkouts: WorkoutSession[];
 };
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const [equipmentResult, completedSessionsResult] = await Promise.all([
+  const [
+    equipmentResult,
+    completedSessionsResult,
+    latestWorkoutResult,
+    recentWorkoutsResult,
+  ] = await Promise.all([
     supabasePublic.from("equipment_status").select("*").order("equipment_name"),
     supabasePublic
       .from("equipment_sessions")
@@ -30,6 +50,21 @@ export async function getDashboardData(): Promise<DashboardData> {
       .eq("session_status", "completed")
       .order("ended_at", { ascending: false })
       .limit(10),
+    supabasePublic
+      .from("workout_sessions")
+      .select(
+        "id, external_session_id, exercise, sets, reps_per_set, bad_reps, form_score, coaching_summary, started_at, ended_at"
+      )
+      .order("ended_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabasePublic
+      .from("workout_sessions")
+      .select(
+        "id, external_session_id, exercise, sets, reps_per_set, bad_reps, form_score, coaching_summary, started_at, ended_at"
+      )
+      .order("ended_at", { ascending: false })
+      .limit(5),
   ]);
 
   if (equipmentResult.error) {
@@ -42,8 +77,18 @@ export async function getDashboardData(): Promise<DashboardData> {
     );
   }
 
+  if (latestWorkoutResult.error) {
+    throw new Error(`Failed to load latest workout: ${latestWorkoutResult.error.message}`);
+  }
+
+  if (recentWorkoutsResult.error) {
+    throw new Error(`Failed to load recent workouts: ${recentWorkoutsResult.error.message}`);
+  }
+
   return {
     equipment: (equipmentResult.data ?? []) as EquipmentStatus[],
     completedSessions: (completedSessionsResult.data ?? []) as CompletedSession[],
+    latestWorkout: (latestWorkoutResult.data ?? null) as WorkoutSession | null,
+    recentWorkouts: (recentWorkoutsResult.data ?? []) as WorkoutSession[],
   };
 }

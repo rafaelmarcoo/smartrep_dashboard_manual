@@ -13,20 +13,36 @@ type SyncState = {
 };
 
 async function runSync() {
-  const res = await fetch("/api/sync/availability", {
+  const availabilityRes = await fetch("/api/sync/availability", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
   });
 
-  const payload = (await res.json()) as {
+  const availabilityPayload = (await availabilityRes.json()) as {
     ok?: boolean;
     error?: string;
   };
 
-  if (!res.ok || !payload.ok) {
-    throw new Error(payload.error ?? "Sync failed");
+  if (!availabilityRes.ok || !availabilityPayload.ok) {
+    throw new Error(availabilityPayload.error ?? "Availability sync failed");
+  }
+
+  const workoutsRes = await fetch("/api/sync/workouts", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  const workoutsPayload = (await workoutsRes.json()) as {
+    ok?: boolean;
+    error?: string;
+  };
+
+  if (!workoutsRes.ok || !workoutsPayload.ok) {
+    throw new Error(workoutsPayload.error ?? "Workout sync failed");
   }
 }
 
