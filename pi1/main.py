@@ -6,19 +6,17 @@ import RPi.GPIO as GPIO
 
 from adc import read_adc
 from config import AVAILABLE, CHANNEL, CHAIR, EQUIPMENT, OCCUPIED, SLEEP_TIME, THRESHOLD
+from control_loop import run_control_loop
 from led import setup_leds, update_led
 from mqtt_client import publish
-from session_manager import SessionManager
-from tracker import track_workout
 
 log_lock = threading.Lock()
 
 setup_leds(EQUIPMENT)
-session_mgr = SessionManager()
 
 
 def workout_thread():
-    track_workout(session_mgr)
+    run_control_loop()
 
 
 def sensor_led_thread():
@@ -40,13 +38,12 @@ def sensor_led_thread():
                 # pair participates in workout session start/end.
                 # The LEDs and availability telemetry still stay per-equipment.
                 # Only the session lifecycle is unified at the dumbbell-pair level.
-                update_led(eq, available)
+                update_led(eq, not available)
                 equipment_states[name] = available
                 overall_state[name] = AVAILABLE if available else OCCUPIED
 
                 log("GYM EQUIPMENT", f"{name}: {overall_state[name]}")
 
-            session_mgr.update_pair_session(equipment_states)
             publish(overall_state)
 
             print("-" * 30)

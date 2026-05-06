@@ -5,9 +5,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from ai_coach import generate_coaching
-from config import SESSION_ID, START_TIME
-from mqtt_client import publish
+from config import SET_COUNTDOWN_SECONDS
 
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
@@ -23,7 +21,11 @@ def calculate_angle(a, b, c):
     ba = a - b
     bc = c - b
 
-    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+    denominator = np.linalg.norm(ba) * np.linalg.norm(bc)
+    if denominator == 0:
+        return 0
+
+    cosine_angle = np.dot(ba, bc) / denominator
     cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
     angle = np.degrees(np.arccos(cosine_angle))
     return angle
@@ -80,49 +82,18 @@ def detect_squat_angle(landmarks):
     )
 
 
-def create_empty_session_data(session):
-    return {
-        "session_id": session[SESSION_ID],
-        "exercise": "unknown",
-        "sets": 0,
-        "reps_per_set": [],
-        "bad_reps": 0,
-        "form_score": None,
-        "angle_data": [],
-        # The sensor loop is the source of truth for when the shared
-        # dumbbell session started, so the camera reuses that timestamp.
-        "start_time": session[START_TIME].isoformat(),
-        "end_time": None,
-    }
-
-
 def create_exercise_state():
     return {
         "stage": None,
         "current_reps": 0,
-        "sets": 0,
-        "reps_per_set": [],
         "bad_reps": 0,
         "angle_data": [],
         "current_rep_angles": [],
-        "rep_events": 0,
-        "motion_score": 0,
-        "target_reached_logged": False,
     }
-
-
-def finalize_set(exercise_state):
-    if exercise_state["current_reps"] <= 0:
-        return
-
-    exercise_state["sets"] += 1
-    exercise_state["reps_per_set"].append(exercise_state["current_reps"])
-    exercise_state["current_reps"] = 0
 
 
 def register_rep(exercise_state, rep_quality_check):
     exercise_state["current_reps"] += 1
-    exercise_state["rep_events"] += 1
 
     rep_summary = {
         "rep": exercise_state["current_reps"],
@@ -143,7 +114,6 @@ def update_bicep_curl_state(exercise_state, angle):
 
     if angle > 145:
         exercise_state["stage"] = "down"
-        exercise_state["motion_score"] += 1
 
     if angle < 55 and exercise_state["stage"] == "down":
         exercise_state["stage"] = "up"
@@ -158,7 +128,6 @@ def update_squat_state(exercise_state, angle):
 
     if angle > 155:
         exercise_state["stage"] = "up"
-        exercise_state["motion_score"] += 1
 
     if angle < 95 and exercise_state["stage"] == "up":
         exercise_state["stage"] = "down"
@@ -168,162 +137,166 @@ def update_squat_state(exercise_state, angle):
         )
 
 
-def maybe_finalize_target_set(exercise_name, exercise_state, reps_per_set_target):
-    if exercise_state["current_reps"] >= reps_per_set_target:
-        finalize_set(exercise_state)
-        print(f"{exercise_name} set {exercise_state['sets']} completed")
+def score_form(bad_reps, total_reps):
+    if total_reps <= 0:
+        return None
+    return max(0, 100 - bad_reps * 10)
 
 
-def choose_dominant_exercise(exercise_states):
-    # We only support curls and squats for now, so choose the one with the
-    # clearest rep pattern. Motion score is the fallback when no reps landed.
-    ranked = sorted(
-        SUPPORTED_EXERCISES,
-        key=lambda exercise_name: (
-            exercise_states[exercise_name]["rep_events"],
-            exercise_states[exercise_name]["motion_score"],
-        ),
-        reverse=True,
-    )
-    return ranked[0]
+class ManualWorkoutTracker:
+    def __init__(self):
+        self.cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        if not self.cap.isOpened():
+            raise RuntimeError("Camera failed to open")
 
+        self.session = None
+        self.active_set = None
+        self.completed_sets = []
 
-def build_session_summary(session_data, chosen_exercise, exercise_state):
-    finalize_set(exercise_state)
+    def start_session(self, session_id, exercise, started_at=None):
+        if exercise not in SUPPORTED_EXERCISES:
+            raise ValueError(f"Unsupported exercise: {exercise}")
 
-    session_data["exercise"] = chosen_exercise
-    session_data["sets"] = exercise_state["sets"]
-    session_data["reps_per_set"] = exercise_state["reps_per_set"]
-    session_data["bad_reps"] = exercise_state["bad_reps"]
-    session_data["angle_data"] = exercise_state["angle_data"]
-    session_data["form_score"] = max(0, 100 - exercise_state["bad_reps"] * 10)
+        self.session = {
+            "external_session_id": session_id,
+            "exercise": exercise,
+            "started_at": started_at or datetime.utcnow().isoformat(),
+        }
+        self.active_set = None
+        self.completed_sets = []
+        print(f"Manual workout session started: {session_id} ({exercise})")
 
-    return session_data
+    def start_set(self, external_set_id, set_number):
+        if self.session is None:
+            raise RuntimeError("Cannot start a set without an active session")
+        if self.active_set is not None:
+            raise RuntimeError("A set is already active")
 
+        self.active_set = {
+            "external_set_id": external_set_id,
+            "set_number": set_number,
+            "state": create_exercise_state(),
+            "status": "countdown",
+            "countdown_until": time.time() + SET_COUNTDOWN_SECONDS,
+            "started_at": None,
+        }
+        print(f"Set {set_number} countdown started")
 
-def build_workout_payload(session_data, coaching_summary):
-    return {
-        # This event reuses the shared dumbbell session id instead of
-        # creating a second camera-only session.
-        "event": "session_complete",
-        "session_id": session_data["session_id"],
-        "exercise": session_data["exercise"],
-        "sets": session_data["sets"],
-        "reps_per_set": session_data["reps_per_set"],
-        "bad_reps": session_data["bad_reps"],
-        "form_score": session_data["form_score"],
-        "start_time": session_data["start_time"],
-        "end_time": session_data["end_time"],
-        "coaching_summary": coaching_summary,
-    }
+    def end_set(self):
+        if self.session is None or self.active_set is None:
+            raise RuntimeError("No active set to end")
 
+        state = self.active_set["state"]
+        reps = state["current_reps"]
+        bad_reps = state["bad_reps"]
+        ended_at = datetime.utcnow().isoformat()
 
-def initialize_session_tracking(session):
-    exercise_states = {
-        "bicep_curl": create_exercise_state(),
-        "squat": create_exercise_state(),
-    }
-    return create_empty_session_data(session), exercise_states
+        payload = {
+            "external_session_id": self.session["external_session_id"],
+            "external_set_id": self.active_set["external_set_id"],
+            "set_number": self.active_set["set_number"],
+            "exercise": self.session["exercise"],
+            "reps": reps,
+            "bad_reps": bad_reps,
+            "form_score": score_form(bad_reps, reps),
+            "angle_data": state["angle_data"],
+            "started_at": self.active_set["started_at"],
+            "ended_at": ended_at,
+        }
 
+        self.completed_sets.append(payload)
+        print(f"Set {self.active_set['set_number']} ended")
+        self.active_set = None
+        return payload
 
-def track_workout(session_manager):
-    max_sets = 3
-    reps_per_set_target = 12
-    active_session_id = None
-    session_data = None
-    exercise_states = None
-    locked_exercise = None
-    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+    def end_session(self):
+        if self.session is None:
+            raise RuntimeError("No active session to end")
+        if self.active_set is not None:
+            raise RuntimeError("End the active set before ending the session")
 
-    if not cap.isOpened():
-        raise RuntimeError("Camera failed to open")
+        total_bad_reps = sum(item["bad_reps"] or 0 for item in self.completed_sets)
+        scored_sets = [
+            item["form_score"] for item in self.completed_sets if item["form_score"] is not None
+        ]
+        average_score = (
+            round(sum(scored_sets) / len(scored_sets), 1) if scored_sets else None
+        )
+        payload = {
+            "external_session_id": self.session["external_session_id"],
+            "exercise": self.session["exercise"],
+            "sets": len(self.completed_sets),
+            "reps_per_set": [item["reps"] for item in self.completed_sets],
+            "bad_reps": total_bad_reps,
+            "form_score": average_score,
+            "started_at": self.session["started_at"],
+            "ended_at": datetime.utcnow().isoformat(),
+        }
 
-    try:
-        while True:
-            session = session_manager.get_active_session()
-            ret, frame = cap.read()
+        print(f"Manual workout session ended: {self.session['external_session_id']}")
+        self.session = None
+        self.active_set = None
+        self.completed_sets = []
+        return payload
 
-            if not ret:
-                print("Camera read failed")
-                time.sleep(0.1)
-                continue
+    def cancel_session(self):
+        self.session = None
+        self.active_set = None
+        self.completed_sets = []
+        print("Manual workout session cancelled")
 
-            if session is None:
-                if active_session_id is not None and session_data is not None and exercise_states is not None:
-                    chosen_exercise = locked_exercise or choose_dominant_exercise(exercise_states)
-                    session_data = build_session_summary(
-                        session_data,
-                        chosen_exercise,
-                        exercise_states[chosen_exercise],
+    def tick(self, status_callback=None):
+        ret, frame = self.cap.read()
+        if not ret:
+            print("Camera read failed")
+            time.sleep(0.1)
+            return True
+
+        if self.session is not None and self.active_set is not None:
+            if self.active_set["status"] == "countdown":
+                remaining = self.active_set["countdown_until"] - time.time()
+                if remaining <= 0:
+                    started_at = datetime.utcnow().isoformat()
+                    self.active_set["status"] = "active"
+                    self.active_set["started_at"] = started_at
+                    if status_callback is not None:
+                        status_callback(
+                            self.active_set["external_set_id"],
+                            "active",
+                            started_at,
+                        )
+                    print(f"Set {self.active_set['set_number']} active")
+                else:
+                    cv2.putText(
+                        frame,
+                        str(max(1, int(np.ceil(remaining)))),
+                        (40, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        2,
+                        (0, 255, 255),
+                        4,
                     )
-                    session_data["end_time"] = datetime.utcnow().isoformat()
 
-                    coaching = generate_coaching(session_data)
-                    publish(build_workout_payload(session_data, coaching))
+            if self.active_set is not None and self.active_set["status"] == "active":
+                self._process_active_frame(frame)
 
-                    print("Shared workout session complete")
+        cv2.imshow("Tracking", frame)
+        return (cv2.waitKey(1) & 0xFF) != ord("q")
 
-                    active_session_id = None
-                    session_data = None
-                    exercise_states = None
-                    locked_exercise = None
+    def _process_active_frame(self, frame):
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = pose.process(image)
+        if not results.pose_landmarks:
+            return
 
-                cv2.imshow("Tracking", frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-                time.sleep(0.1)
-                continue
+        landmarks = results.pose_landmarks.landmark
+        state = self.active_set["state"]
 
-            if session[SESSION_ID] != active_session_id:
-                active_session_id = session[SESSION_ID]
-                session_data, exercise_states = initialize_session_tracking(session)
-                locked_exercise = None
+        if self.session["exercise"] == "bicep_curl":
+            update_bicep_curl_state(state, detect_bicep_curl_angle(landmarks))
+        elif self.session["exercise"] == "squat":
+            update_squat_state(state, detect_squat_angle(landmarks))
 
-                # The tracker does not mint session ids anymore.
-                # It joins the active dumbbell session that sensors opened.
-                print(f"Tracking shared session: {active_session_id}")
-
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(image)
-
-            if results.pose_landmarks and session_data is not None and exercise_states is not None:
-                landmarks = results.pose_landmarks.landmark
-                curl_angle = detect_bicep_curl_angle(landmarks)
-                squat_angle = detect_squat_angle(landmarks)
-
-                update_bicep_curl_state(exercise_states["bicep_curl"], curl_angle)
-                update_squat_state(exercise_states["squat"], squat_angle)
-
-                if locked_exercise is None:
-                    chosen_exercise = choose_dominant_exercise(exercise_states)
-                    chosen_state = exercise_states[chosen_exercise]
-
-                    # We lock onto the first exercise that shows a clear
-                    # movement pattern so one dumbbell session maps to one
-                    # workout type in the telemetry.
-                    if chosen_state["rep_events"] >= 2:
-                        locked_exercise = chosen_exercise
-                        session_data["exercise"] = chosen_exercise
-                        print(f"Detected exercise: {chosen_exercise}")
-
-                active_exercise = locked_exercise or choose_dominant_exercise(exercise_states)
-                active_state = exercise_states[active_exercise]
-
-                maybe_finalize_target_set(
-                    active_exercise,
-                    active_state,
-                    reps_per_set_target,
-                )
-
-                if active_state["sets"] >= max_sets and not active_state["target_reached_logged"]:
-                    print("Workout set target reached; waiting for dumbbells to return")
-                    active_state["target_reached_logged"] = True
-
-            cv2.imshow("Tracking", frame)
-
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
-    finally:
-        cap.release()
+    def close(self):
+        self.cap.release()
         cv2.destroyAllWindows()

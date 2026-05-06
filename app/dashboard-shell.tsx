@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { LiveSync } from "@/app/live-sync";
-import type { DashboardData, WorkoutSession } from "@/lib/dashboard-data";
+import type { DashboardData, WorkoutSession, WorkoutSet } from "@/lib/dashboard-data";
 
 function statusColor(status: string) {
   return status === "occupied"
@@ -49,20 +49,75 @@ function formatWorkoutValue(value: WorkoutSession["reps_per_set"]) {
   return String(value);
 }
 
+function formatSetValue(value: WorkoutSet["angle_data"]) {
+  if (value === null || value === undefined) return "Not captured";
+  if (Array.isArray(value)) return `${value.length} reps captured`;
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+async function sendWorkoutControl(action: string, exercise?: string) {
+  const res = await fetch("/api/workouts/control", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ action, exercise }),
+  });
+
+  const payload = (await res.json()) as { ok?: boolean; error?: string };
+
+  if (!res.ok || !payload.ok) {
+    throw new Error(payload.error ?? "Workout control failed");
+  }
+
+  return payload;
+}
+
 export function DashboardShell({ initialData }: { initialData: DashboardData }) {
   const [dashboardData, setDashboardData] = useState(initialData);
   const [activeView, setActiveView] = useState<"availability" | "workouts">("availability");
+  const [selectedExercise, setSelectedExercise] = useState<"bicep_curl" | "squat">("bicep_curl");
   const [selectedWorkoutId, setSelectedWorkoutId] = useState<string | null>(
     initialData.latestWorkout?.id ?? null
   );
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [isSendingControl, setIsSendingControl] = useState(false);
   const occupiedCount = dashboardData.equipment.filter(
     (item) => item.current_status === "occupied"
   ).length;
   const availableCount = dashboardData.equipment.length - occupiedCount;
+  const activeWorkout = dashboardData.activeWorkout;
+  const activeSet = dashboardData.activeSet;
   const selectedWorkout =
     dashboardData.recentWorkouts.find((session) => session.id === selectedWorkoutId) ??
     dashboardData.recentWorkouts[0] ??
     dashboardData.latestWorkout;
+
+  async function handleControl(action: string) {
+    setControlError(null);
+    setIsSendingControl(true);
+
+    try {
+      await sendWorkoutControl(
+        action,
+        action === "start_session" ? selectedExercise : undefined
+      );
+      const res = await fetch("/api/dashboard/availability");
+      const payload = (await res.json()) as ({ ok: true } & DashboardData) | { error?: string };
+
+      if (!res.ok || !("ok" in payload) || payload.ok !== true) {
+        throw new Error(("error" in payload && payload.error) || "Dashboard refresh failed");
+      }
+
+      setDashboardData(payload);
+      setActiveView("workouts");
+    } catch (error) {
+      setControlError(error instanceof Error ? error.message : "Workout control failed");
+    } finally {
+      setIsSendingControl(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-slate-50 px-5 py-6 sm:px-8 sm:py-10">
@@ -201,6 +256,182 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                 </h2>
               </div>
             </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Manual Control
+                    </p>
+                    <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">
+                      {activeWorkout
+                        ? `${formatExerciseName(activeWorkout.exercise)} session active`
+                        : "Ready to start a workout"}
+                    </h3>
+                  </div>
+
+                  <div className="inline-grid grid-cols-2 rounded-2xl border border-slate-200 bg-slate-50 p-1">
+                    {(["bicep_curl", "squat"] as const).map((exercise) => (
+                      <button
+                        key={exercise}
+                        type="button"
+                        disabled={Boolean(activeWorkout) || isSendingControl}
+                        onClick={() => setSelectedExercise(exercise)}
+                        className={`rounded-xl px-4 py-2 text-sm font-medium capitalize transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                          selectedExercise === exercise
+                            ? "bg-slate-900 text-white"
+                            : "text-slate-600 hover:bg-white"
+                        }`}
+                      >
+                        {formatExerciseName(exercise)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                  <button
+                    type="button"
+                    disabled={Boolean(activeWorkout) || isSendingControl}
+                    onClick={() => void handleControl("start_session")}
+                    className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Start Session
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeWorkout || Boolean(activeSet) || isSendingControl}
+                    onClick={() => void handleControl("start_set")}
+                    className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Start Set
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeSet || isSendingControl}
+                    onClick={() => void handleControl("end_set")}
+                    className="rounded-2xl bg-amber-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white"
+                  >
+                    End Set
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeWorkout || Boolean(activeSet) || isSendingControl}
+                    onClick={() => void handleControl("end_session")}
+                    className="rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    End Session
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeWorkout || isSendingControl}
+                    onClick={() => void handleControl("cancel_session")}
+                    className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                    Session
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-slate-950">
+                    {activeWorkout
+                      ? activeWorkout.external_session_id.slice(0, 8)
+                      : "Not active"}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                    Current set
+                  </p>
+                  <p className="mt-2 text-sm font-semibold capitalize text-slate-950">
+                    {activeSet
+                      ? `Set ${activeSet.set_number} - ${activeSet.set_status ?? "active"}`
+                      : "No active set"}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                    Exercise lock
+                  </p>
+                  <p className="mt-2 text-sm font-semibold capitalize text-slate-950">
+                    {formatExerciseName(activeWorkout?.exercise ?? selectedExercise)}
+                  </p>
+                </div>
+              </div>
+
+              {controlError ? (
+                <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {controlError}
+                </p>
+              ) : null}
+            </div>
+
+            {dashboardData.recentSets.length > 0 ? (
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Set Feedback
+                  </p>
+                  <h3 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">
+                    Recent sets
+                  </h3>
+                </div>
+
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {dashboardData.recentSets.map((set) => (
+                    <article
+                      key={set.id}
+                      className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold capitalize text-slate-950">
+                            {formatExerciseName(set.exercise)} set {set.set_number}
+                          </p>
+                          <p className="mt-1 text-xs capitalize text-slate-500">
+                            {set.set_status ?? "completed"}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700">
+                          Score {set.form_score ?? "N/A"}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <p className="text-xs text-slate-500">Reps</p>
+                          <p className="font-semibold text-slate-950">
+                            {set.reps ?? "N/A"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500">Bad reps</p>
+                          <p className="font-semibold text-slate-950">
+                            {set.bad_reps ?? "N/A"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500">Angles</p>
+                          <p className="font-semibold text-slate-950">
+                            {formatSetValue(set.angle_data)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <p className="mt-4 text-sm leading-6 text-slate-700">
+                        {set.coaching_summary ?? "Waiting for set feedback."}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {selectedWorkout ? (
               <div className="grid gap-4 lg:grid-cols-[0.72fr_1.28fr]">

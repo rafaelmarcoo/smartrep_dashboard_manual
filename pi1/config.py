@@ -1,10 +1,20 @@
+import os
+
 # MQTT
-OPENAI_API_KEY=""
-TB_PI1_TOKEN=""
-TB_PI2_TOKEN=""
-TB_BROKER="mqtt.thingsboard.cloud"
-TB_PORT=1883
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+TB_PI1_TOKEN = os.getenv("TB_PI1_TOKEN", "")
+TB_PI2_TOKEN = os.getenv("TB_PI2_TOKEN", "")
+TB_BROKER = os.getenv("TB_BROKER", "mqtt.thingsboard.cloud")
+TB_PORT = int(os.getenv("TB_PORT", "1883"))
 MQTT_TOPIC = "v1/devices/me/telemetry"
+
+# Dashboard / Supabase command control
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+PI_DEVICE_ID = os.getenv("PI_DEVICE_ID", "SmartRep-Pi1")
+DASHBOARD_API_BASE_URL = os.getenv("DASHBOARD_API_BASE_URL", "http://localhost:3000")
+COMMAND_POLL_SECONDS = float(os.getenv("COMMAND_POLL_SECONDS", "0.35"))
+SET_COUNTDOWN_SECONDS = int(os.getenv("SET_COUNTDOWN_SECONDS", "3"))
 
 #Equipment Name
 DUMBBELL_LEFT = "dumbbell_left"

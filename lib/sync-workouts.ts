@@ -150,6 +150,7 @@ async function applyWorkoutEvent(ts: number, values: Record<string, string>) {
       coaching_summary: values.coaching_summary ?? values.feedback ?? null,
       started_at: values.start_time ?? null,
       ended_at: values.end_time ?? new Date(ts).toISOString(),
+      session_status: "completed",
       source_device: "SmartRep-Pi1-Camera",
       updated_at: new Date().toISOString(),
     },
