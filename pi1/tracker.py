@@ -230,13 +230,12 @@ def track_workout(session_manager):
                 time.sleep(0.1)
                 continue
 
-            current_set_number = session["current_set_number"]
-            current_set_key = (session[SESSION_ID], current_set_number)
+            current_set_key = (session[SESSION_ID], session[FIELD_SET_NUMBER])
             if current_set_key != active_set_key:
                 active_set_key = current_set_key
                 set_state = create_set_state()
                 print(
-                    f"Tracking session {session[SESSION_ID]} set {current_set_number} "
+                    f"Tracking session {session[SESSION_ID]} set {session[FIELD_SET_NUMBER]} "
                     f"for {session[FIELD_EXERCISE]}"
                 )
 
