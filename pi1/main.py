@@ -7,7 +7,8 @@ import RPi.GPIO as GPIO
 from adc import read_adc
 from config import AVAILABLE, CHANNEL, CHAIR, EQUIPMENT, OCCUPIED, SLEEP_TIME, THRESHOLD
 from led import setup_leds, update_led
-from mqtt_client import publish
+from mqtt_client import configure as configure_mqtt
+from mqtt_client import publish, shutdown as shutdown_mqtt
 from session_manager import SessionManager
 from tracker import track_workout
 
@@ -24,7 +25,6 @@ def workout_thread():
 def sensor_led_thread():
     try:
         while True:
-            equipment_states = {}
             overall_state = {}
 
             for name, eq in EQUIPMENT.items():
@@ -35,18 +35,11 @@ def sensor_led_thread():
                 else:
                     available = value > eq[THRESHOLD]
 
-                # Chair and foam roller are status-only sensors.
-                # We still publish their availability, but only the dumbbell
-                # pair participates in workout session start/end.
-                # The LEDs and availability telemetry still stay per-equipment.
-                # Only the session lifecycle is unified at the dumbbell-pair level.
                 update_led(eq, available)
-                equipment_states[name] = available
                 overall_state[name] = AVAILABLE if available else OCCUPIED
 
                 log("GYM EQUIPMENT", f"{name}: {overall_state[name]}")
 
-            session_mgr.update_pair_session(equipment_states)
             publish(overall_state)
 
             print("-" * 30)
@@ -54,9 +47,12 @@ def sensor_led_thread():
 
     finally:
         GPIO.cleanup()
+        shutdown_mqtt()
 
 
 def main():
+    configure_mqtt(command_handler=session_mgr.handle_command)
+
     t1 = threading.Thread(target=workout_thread)
     t2 = threading.Thread(target=sensor_led_thread)
 

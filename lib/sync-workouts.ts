@@ -3,7 +3,9 @@ import {
   getHistoricalWorkoutEvents,
   getPi1DeviceId,
   getWorkoutEventKeys,
+  isTrackedWorkoutEvent,
 } from "./thingsboard";
+import { WORKOUT_EVENTS } from "./workout-contract";
 
 type TbValue = { ts: number; value: string };
 type TelemetryGroup = { ts: number; values: Record<string, string> };
@@ -53,6 +55,16 @@ function parseNumeric(value?: string) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+function parseJsonValue(value?: string) {
+  if (!value) return null;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 function normalizeRepsPerSet(value?: string) {
   if (!value) return null;
 
@@ -64,15 +76,8 @@ function normalizeRepsPerSet(value?: string) {
   }
 }
 
-function isWorkoutSummary(values: Record<string, string>) {
-  const exercise = values.exercise;
-  const sessionId = values.session_id;
-  const event = values.event;
-
-  const looksLikeWorkoutEvent =
-    event === "session_complete" || event === "workout_session_complete";
-
-  return Boolean(exercise && sessionId && (looksLikeWorkoutEvent || values.end_time));
+function isRelevantWorkoutEvent(values: Record<string, string>) {
+  return isTrackedWorkoutEvent(values.event) && Boolean(values.session_id);
 }
 
 async function fetchHistoricalWorkoutEvents(startTs: number, endTs: number) {
@@ -120,9 +125,7 @@ async function updateSyncState(lastTsMs: number) {
   if (syncWriteError) throw syncWriteError;
 }
 
-async function applyWorkoutEvent(ts: number, values: Record<string, string>) {
-  if (!isWorkoutSummary(values)) return false;
-
+async function insertRawWorkoutEvent(ts: number, values: Record<string, string>) {
   const rawPayload = {
     ...values,
     _ts_iso: new Date(ts).toISOString(),
@@ -136,27 +139,56 @@ async function applyWorkoutEvent(ts: number, values: Record<string, string>) {
   });
 
   if (rawInsertError) throw rawInsertError;
+}
 
-  const { error } = await supabaseAdmin.from("workout_sessions").upsert(
-    {
-      // The Pi camera now publishes the same shared session id that the
-      // dumbbell sensors opened, so workout_sessions lines up with equipment_sessions.
-      external_session_id: values.session_id,
-      exercise: values.exercise,
-      sets: parseInteger(values.sets),
-      reps_per_set: normalizeRepsPerSet(values.reps_per_set),
-      bad_reps: parseInteger(values.bad_reps),
-      form_score: parseNumeric(values.form_score),
-      coaching_summary: values.coaching_summary ?? values.feedback ?? null,
-      started_at: values.start_time ?? null,
-      ended_at: values.end_time ?? new Date(ts).toISOString(),
-      source_device: "SmartRep-Pi1-Camera",
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "external_session_id" }
-  );
+async function applyWorkoutEvent(ts: number, values: Record<string, string>) {
+  if (!isRelevantWorkoutEvent(values)) return false;
 
-  if (error) throw error;
+  await insertRawWorkoutEvent(ts, values);
+
+  if (values.event === WORKOUT_EVENTS.setCompleted) {
+    const { error } = await supabaseAdmin.from("workout_sets").upsert(
+      {
+        external_set_id: values.set_id,
+        external_session_id: values.session_id,
+        set_number: parseInteger(values.set_number),
+        exercise: values.exercise,
+        reps: parseInteger(values.reps),
+        bad_reps: parseInteger(values.bad_reps),
+        form_score: parseNumeric(values.form_score),
+        angle_data: parseJsonValue(values.angle_data),
+        coaching_summary: values.coaching_summary ?? values.feedback ?? null,
+        started_at: values.start_time ?? null,
+        ended_at: values.end_time ?? new Date(ts).toISOString(),
+        source_device: "SmartRep-Pi1-Camera",
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "external_set_id" }
+    );
+
+    if (error) throw error;
+  }
+
+  if (values.event === WORKOUT_EVENTS.sessionCompleted) {
+    const { error } = await supabaseAdmin.from("workout_sessions").upsert(
+      {
+        external_session_id: values.session_id,
+        exercise: values.exercise,
+        sets: parseInteger(values.sets),
+        reps_per_set: normalizeRepsPerSet(values.reps_per_set),
+        bad_reps: parseInteger(values.bad_reps),
+        form_score: parseNumeric(values.form_score),
+        coaching_summary: values.coaching_summary ?? values.feedback ?? null,
+        started_at: values.start_time ?? null,
+        ended_at: values.end_time ?? new Date(ts).toISOString(),
+        source_device: "SmartRep-Pi1-Camera",
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "external_session_id" }
+    );
+
+    if (error) throw error;
+  }
 
   return true;
 }
