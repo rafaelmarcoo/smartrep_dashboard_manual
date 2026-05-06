@@ -15,13 +15,17 @@ class DashboardApi:
         return self._post("/api/pi/workouts/session-complete", payload)
 
     def _post(self, path, payload):
+        url = f"{self.base_url}{path}"
         request = urllib.request.Request(
-            f"{self.base_url}{path}",
+            url,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
 
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read().decode("utf-8")
-            return json.loads(body) if body else None
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read().decode("utf-8")
+                return json.loads(body) if body else None
+        except Exception as error:
+            raise RuntimeError(f"Dashboard POST {url} failed: {error}") from error

@@ -36,7 +36,14 @@ def get_point(landmarks, pose_landmark):
     return [landmark.x, landmark.y]
 
 
-def get_average_angle(landmarks, left_triplet, right_triplet):
+def get_triplet_visibility(landmarks, triplet):
+    return sum(landmarks[item.value].visibility for item in triplet) / len(triplet)
+
+
+def get_best_visible_angle(landmarks, left_triplet, right_triplet):
+    left_visibility = get_triplet_visibility(landmarks, left_triplet)
+    right_visibility = get_triplet_visibility(landmarks, right_triplet)
+
     left_angle = calculate_angle(
         get_point(landmarks, left_triplet[0]),
         get_point(landmarks, left_triplet[1]),
@@ -47,11 +54,15 @@ def get_average_angle(landmarks, left_triplet, right_triplet):
         get_point(landmarks, right_triplet[1]),
         get_point(landmarks, right_triplet[2]),
     )
-    return (left_angle + right_angle) / 2
+
+    if abs(left_visibility - right_visibility) < 0.15:
+        return (left_angle + right_angle) / 2
+
+    return left_angle if left_visibility > right_visibility else right_angle
 
 
 def detect_bicep_curl_angle(landmarks):
-    return get_average_angle(
+    return get_best_visible_angle(
         landmarks,
         (
             mp_pose.PoseLandmark.LEFT_SHOULDER,
@@ -67,7 +78,7 @@ def detect_bicep_curl_angle(landmarks):
 
 
 def detect_squat_angle(landmarks):
-    return get_average_angle(
+    return get_best_visible_angle(
         landmarks,
         (
             mp_pose.PoseLandmark.LEFT_HIP,
@@ -115,7 +126,7 @@ def update_bicep_curl_state(exercise_state, angle):
     if angle > 145:
         exercise_state["stage"] = "down"
 
-    if angle < 55 and exercise_state["stage"] == "down":
+    if angle < 70 and exercise_state["stage"] == "down":
         exercise_state["stage"] = "up"
         register_rep(
             exercise_state,
@@ -179,12 +190,17 @@ class ManualWorkoutTracker:
             "status": "countdown",
             "countdown_until": time.time() + SET_COUNTDOWN_SECONDS,
             "started_at": None,
+            "completed_payload": None,
         }
         print(f"Set {set_number} countdown started")
 
     def end_set(self):
         if self.session is None or self.active_set is None:
             raise RuntimeError("No active set to end")
+
+        if self.active_set["completed_payload"] is not None:
+            print(f"Retrying set {self.active_set['set_number']} completion post")
+            return self.active_set["completed_payload"]
 
         state = self.active_set["state"]
         reps = state["current_reps"]
@@ -204,10 +220,19 @@ class ManualWorkoutTracker:
             "ended_at": ended_at,
         }
 
-        self.completed_sets.append(payload)
+        self.active_set["status"] = "processing_feedback"
+        self.active_set["completed_payload"] = payload
         print(f"Set {self.active_set['set_number']} ended")
-        self.active_set = None
         return payload
+
+    def confirm_set_completed(self):
+        if self.active_set is None or self.active_set["completed_payload"] is None:
+            return
+
+        payload = self.active_set["completed_payload"]
+        self.completed_sets.append(payload)
+        print(f"Set {self.active_set['set_number']} feedback posted")
+        self.active_set = None
 
     def end_session(self):
         if self.session is None:
@@ -293,9 +318,23 @@ class ManualWorkoutTracker:
         state = self.active_set["state"]
 
         if self.session["exercise"] == "bicep_curl":
-            update_bicep_curl_state(state, detect_bicep_curl_angle(landmarks))
+            angle = detect_bicep_curl_angle(landmarks)
+            update_bicep_curl_state(state, angle)
         elif self.session["exercise"] == "squat":
-            update_squat_state(state, detect_squat_angle(landmarks))
+            angle = detect_squat_angle(landmarks)
+            update_squat_state(state, angle)
+        else:
+            return
+
+        cv2.putText(
+            frame,
+            f"Reps: {state['current_reps']} Angle: {angle:.0f} Stage: {state['stage'] or '-'}",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2,
+        )
 
     def close(self):
         self.cap.release()

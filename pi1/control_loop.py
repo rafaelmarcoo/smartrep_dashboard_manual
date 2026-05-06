@@ -64,6 +64,7 @@ def handle_command(command, tracker, dashboard):
     if command_type == "end_set":
         set_payload = tracker.end_set()
         dashboard.post_set_complete(set_payload)
+        tracker.confirm_set_completed()
         return
 
     if command_type == "end_session":
