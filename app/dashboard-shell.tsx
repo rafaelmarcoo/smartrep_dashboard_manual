@@ -116,7 +116,14 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
         .filter((set) => set.external_session_id === selectedWorkout.external_session_id)
         .sort((a, b) => a.set_number - b.set_number)
     : [];
-  const latestCompletedSet = dashboardData.recentSets[0] ?? null;
+  const activeWorkoutSets = activeWorkout
+    ? dashboardData.recentSets
+        .filter((set) => set.external_session_id === activeWorkout.external_session_id)
+        .sort((a, b) => b.set_number - a.set_number)
+    : [];
+  const latestActiveWorkoutSet = activeWorkoutSets[0] ?? null;
+  const showManualSetFeedback =
+    Boolean(activeWorkout) && (isEndingSet || (!activeSet && Boolean(latestActiveWorkoutSet)));
 
   const handleDashboardData = useCallback(
     (nextData: DashboardData) => {
@@ -425,52 +432,54 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                 </div>
               ) : null}
 
-              <div className="mt-5 border-t border-slate-200 pt-5">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Latest Set Feedback
-                    </p>
-                    <h4 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">
-                      {isEndingSet
-                        ? "Generating feedback"
-                        : latestCompletedSet
-                          ? `${formatExerciseName(latestCompletedSet.exercise)} set ${
-                              latestCompletedSet.set_number
-                            }`
-                          : "No set feedback yet"}
-                    </h4>
-                  </div>
-                  {latestCompletedSet ? (
-                    <div className="grid min-w-72 grid-cols-3 gap-2 text-sm">
-                      <div className="rounded-xl bg-slate-50 px-3 py-2">
-                        <p className="text-[11px] text-slate-500">Reps</p>
-                        <p className="font-semibold text-slate-950">
-                          {latestCompletedSet.reps ?? "N/A"}
-                        </p>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 px-3 py-2">
-                        <p className="text-[11px] text-slate-500">Bad reps</p>
-                        <p className="font-semibold text-slate-950">
-                          {latestCompletedSet.bad_reps ?? "N/A"}
-                        </p>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 px-3 py-2">
-                        <p className="text-[11px] text-slate-500">Score</p>
-                        <p className="font-semibold text-slate-950">
-                          {latestCompletedSet.form_score ?? "N/A"}
-                        </p>
-                      </div>
+              {showManualSetFeedback ? (
+                <div className="mt-5 border-t border-slate-200 pt-5">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Set Feedback
+                      </p>
+                      <h4 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">
+                        {isEndingSet
+                          ? "Generating feedback"
+                          : latestActiveWorkoutSet
+                            ? `${formatExerciseName(latestActiveWorkoutSet.exercise)} set ${
+                                latestActiveWorkoutSet.set_number
+                              }`
+                            : "No set feedback yet"}
+                      </h4>
                     </div>
-                  ) : null}
+                    {latestActiveWorkoutSet ? (
+                      <div className="grid min-w-72 grid-cols-3 gap-2 text-sm">
+                        <div className="rounded-xl bg-slate-50 px-3 py-2">
+                          <p className="text-[11px] text-slate-500">Reps</p>
+                          <p className="font-semibold text-slate-950">
+                            {latestActiveWorkoutSet.reps ?? "N/A"}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-slate-50 px-3 py-2">
+                          <p className="text-[11px] text-slate-500">Bad reps</p>
+                          <p className="font-semibold text-slate-950">
+                            {latestActiveWorkoutSet.bad_reps ?? "N/A"}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-slate-50 px-3 py-2">
+                          <p className="text-[11px] text-slate-500">Score</p>
+                          <p className="font-semibold text-slate-950">
+                            {latestActiveWorkoutSet.form_score ?? "N/A"}
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-700">
+                    {isEndingSet
+                      ? "Waiting for the Pi to finish the set and return coaching."
+                      : latestActiveWorkoutSet?.coaching_summary ??
+                        "End a set to see the coach feedback here."}
+                  </p>
                 </div>
-                <p className="mt-3 text-sm leading-6 text-slate-700">
-                  {isEndingSet
-                    ? "Waiting for the Pi to finish the set and return coaching."
-                    : latestCompletedSet?.coaching_summary ??
-                      "End a set to see the coach feedback here."}
-                </p>
-              </div>
+              ) : null}
             </div>
 
             {selectedWorkout ? (
