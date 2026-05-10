@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { LiveSync } from "@/app/live-sync";
 import type { DashboardData, WorkoutSession, WorkoutSet } from "@/lib/dashboard-data";
+
+type DashboardRefreshPayload = ({ ok: true } & DashboardData) | { ok?: false; error?: string };
+type PendingControlAction = "end_set" | "end_session" | null;
 
 function statusColor(status: string) {
   return status === "occupied"
@@ -74,6 +77,16 @@ async function sendWorkoutControl(action: string, exercise?: string) {
   return payload;
 }
 
+function isDashboardRefreshPayload(
+  payload: DashboardRefreshPayload
+): payload is { ok: true } & DashboardData {
+  return payload.ok === true;
+}
+
+function getDashboardRefreshError(payload: DashboardRefreshPayload) {
+  return "error" in payload ? payload.error : undefined;
+}
+
 export function DashboardShell({ initialData }: { initialData: DashboardData }) {
   const [dashboardData, setDashboardData] = useState(initialData);
   const [activeView, setActiveView] = useState<"availability" | "workouts">("availability");
@@ -83,20 +96,43 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
   );
   const [controlError, setControlError] = useState<string | null>(null);
   const [isSendingControl, setIsSendingControl] = useState(false);
+  const [pendingControlAction, setPendingControlAction] = useState<PendingControlAction>(null);
   const occupiedCount = dashboardData.equipment.filter(
     (item) => item.current_status === "occupied"
   ).length;
   const availableCount = dashboardData.equipment.length - occupiedCount;
   const activeWorkout = dashboardData.activeWorkout;
   const activeSet = dashboardData.activeSet;
+  const isEndingSet =
+    pendingControlAction === "end_set" || activeSet?.set_status === "processing_feedback";
+  const isEndingSession = pendingControlAction === "end_session";
+  const isControlLocked = isSendingControl || isEndingSet || isEndingSession;
   const selectedWorkout =
     dashboardData.recentWorkouts.find((session) => session.id === selectedWorkoutId) ??
     dashboardData.recentWorkouts[0] ??
     dashboardData.latestWorkout;
 
+  const handleDashboardData = useCallback(
+    (nextData: DashboardData) => {
+      setDashboardData(nextData);
+
+      if (pendingControlAction === "end_set" && !nextData.activeSet) {
+        setPendingControlAction(null);
+      }
+
+      if (pendingControlAction === "end_session" && !nextData.activeWorkout) {
+        setPendingControlAction(null);
+      }
+    },
+    [pendingControlAction]
+  );
+
   async function handleControl(action: string) {
     setControlError(null);
     setIsSendingControl(true);
+    if (action === "end_set" || action === "end_session") {
+      setPendingControlAction(action);
+    }
 
     try {
       await sendWorkoutControl(
@@ -104,16 +140,17 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
         action === "start_session" ? selectedExercise : undefined
       );
       const res = await fetch("/api/dashboard/availability");
-      const payload = (await res.json()) as ({ ok: true } & DashboardData) | { error?: string };
+      const payload = (await res.json()) as DashboardRefreshPayload;
 
-      if (!res.ok || !("ok" in payload) || payload.ok !== true) {
-        throw new Error(("error" in payload && payload.error) || "Dashboard refresh failed");
+      if (!res.ok || !isDashboardRefreshPayload(payload)) {
+        throw new Error(getDashboardRefreshError(payload) || "Dashboard refresh failed");
       }
 
-      setDashboardData(payload);
+      handleDashboardData(payload);
       setActiveView("workouts");
     } catch (error) {
       setControlError(error instanceof Error ? error.message : "Workout control failed");
+      setPendingControlAction(null);
     } finally {
       setIsSendingControl(false);
     }
@@ -135,7 +172,7 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                 Live gym status and workout summaries.
               </p>
             </div>
-            <LiveSync onData={setDashboardData} />
+            <LiveSync onData={handleDashboardData} />
           </div>
 
           <div className="inline-grid w-full grid-cols-2 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm sm:inline-flex sm:w-auto">
@@ -276,7 +313,7 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                       <button
                         key={exercise}
                         type="button"
-                        disabled={Boolean(activeWorkout) || isSendingControl}
+                        disabled={Boolean(activeWorkout) || isControlLocked}
                         onClick={() => setSelectedExercise(exercise)}
                         className={`rounded-xl px-4 py-2 text-sm font-medium capitalize transition disabled:cursor-not-allowed disabled:opacity-50 ${
                           selectedExercise === exercise
@@ -293,7 +330,7 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                   <button
                     type="button"
-                    disabled={Boolean(activeWorkout) || isSendingControl}
+                    disabled={Boolean(activeWorkout) || isControlLocked}
                     onClick={() => void handleControl("start_session")}
                     className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
@@ -301,31 +338,31 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                   </button>
                   <button
                     type="button"
-                    disabled={!activeWorkout || Boolean(activeSet) || isSendingControl}
+                    disabled={!activeWorkout || Boolean(activeSet) || isControlLocked}
                     onClick={() => void handleControl("start_set")}
                     className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
-                    Start Set
+                    {isEndingSession ? "Ending..." : "Start Set"}
                   </button>
                   <button
                     type="button"
-                    disabled={!activeSet || isSendingControl}
+                    disabled={!activeSet || isControlLocked}
                     onClick={() => void handleControl("end_set")}
                     className="rounded-2xl bg-amber-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white"
                   >
-                    End Set
+                    {isEndingSet ? "Getting Feedback..." : "End Set"}
                   </button>
                   <button
                     type="button"
-                    disabled={!activeWorkout || Boolean(activeSet) || isSendingControl}
+                    disabled={!activeWorkout || Boolean(activeSet) || isControlLocked}
                     onClick={() => void handleControl("end_session")}
                     className="rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
-                    End Session
+                    {isEndingSession ? "Getting Feedback..." : "End Session"}
                   </button>
                   <button
                     type="button"
-                    disabled={!activeWorkout || isSendingControl}
+                    disabled={!activeWorkout || isControlLocked}
                     onClick={() => void handleControl("cancel_session")}
                     className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -369,6 +406,17 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                 <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
                   {controlError}
                 </p>
+              ) : null}
+
+              {isEndingSet || isEndingSession ? (
+                <div className="mt-4 flex items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
+                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-blue-600" />
+                  <span>
+                    {isEndingSession
+                      ? "Ending session and generating workout feedback..."
+                      : "Ending set and generating set feedback..."}
+                  </span>
+                </div>
               ) : null}
             </div>
 

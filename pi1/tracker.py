@@ -8,9 +8,11 @@ import numpy as np
 from config import (
     CAMERA_BUFFER_SIZE,
     CAMERA_FPS,
+    CAMERA_FOURCC,
     CAMERA_HEIGHT,
     CAMERA_INDEX,
     CAMERA_WIDTH,
+    POSE_FRAME_WIDTH,
     POSE_PROCESS_EVERY_N_FRAMES,
     SET_COUNTDOWN_SECONDS,
 )
@@ -269,6 +271,9 @@ class ManualWorkoutTracker:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+        if CAMERA_FOURCC:
+            fourcc = cv2.VideoWriter_fourcc(*CAMERA_FOURCC[:4])
+            self.cap.set(cv2.CAP_PROP_FOURCC, fourcc)
 
         self.session = None
         self.active_set = None
@@ -426,7 +431,16 @@ class ManualWorkoutTracker:
         return (cv2.waitKey(1) & 0xFF) != ord("q")
 
     def _process_active_frame(self, frame):
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pose_frame = frame
+        if POSE_FRAME_WIDTH > 0 and frame.shape[1] > POSE_FRAME_WIDTH:
+            scale = POSE_FRAME_WIDTH / frame.shape[1]
+            pose_frame = cv2.resize(
+                frame,
+                (POSE_FRAME_WIDTH, int(frame.shape[0] * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        image = cv2.cvtColor(pose_frame, cv2.COLOR_BGR2RGB)
         image.flags.writeable = False
         results = pose.process(image)
         if not results.pose_landmarks:
@@ -446,7 +460,7 @@ class ManualWorkoutTracker:
             return
 
         self.last_overlay_text = (
-            f"Reps: {state['current_reps']} Angle: {angle:.0f} Stage: {state['stage'] or '-'}"
+            f"Set {self.active_set['set_number']}  Reps {state['current_reps']}"
         )
         self._draw_overlay(frame, self.last_overlay_text)
 

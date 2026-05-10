@@ -22,6 +22,8 @@ CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
 CAMERA_FPS = int(os.getenv("CAMERA_FPS", "30"))
 CAMERA_BUFFER_SIZE = int(os.getenv("CAMERA_BUFFER_SIZE", "1"))
+CAMERA_FOURCC = os.getenv("CAMERA_FOURCC", "MJPG")
+POSE_FRAME_WIDTH = int(os.getenv("POSE_FRAME_WIDTH", "320"))
 POSE_PROCESS_EVERY_N_FRAMES = max(1, int(os.getenv("POSE_PROCESS_EVERY_N_FRAMES", "2")))
 
 #Equipment Name
