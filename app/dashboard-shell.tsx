@@ -111,6 +111,12 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
     dashboardData.recentWorkouts.find((session) => session.id === selectedWorkoutId) ??
     dashboardData.recentWorkouts[0] ??
     dashboardData.latestWorkout;
+  const selectedWorkoutSets = selectedWorkout
+    ? dashboardData.recentSets
+        .filter((set) => set.external_session_id === selectedWorkout.external_session_id)
+        .sort((a, b) => a.set_number - b.set_number)
+    : [];
+  const latestCompletedSet = dashboardData.recentSets[0] ?? null;
 
   const handleDashboardData = useCallback(
     (nextData: DashboardData) => {
@@ -418,75 +424,72 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                   </span>
                 </div>
               ) : null}
-            </div>
 
-            {dashboardData.recentSets.length > 0 ? (
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                    Set Feedback
-                  </p>
-                  <h3 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">
-                    Recent sets
-                  </h3>
-                </div>
-
-                <div className="grid gap-3 lg:grid-cols-2">
-                  {dashboardData.recentSets.map((set) => (
-                    <article
-                      key={set.id}
-                      className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold capitalize text-slate-950">
-                            {formatExerciseName(set.exercise)} set {set.set_number}
-                          </p>
-                          <p className="mt-1 text-xs capitalize text-slate-500">
-                            {set.set_status ?? "completed"}
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700">
-                          Score {set.form_score ?? "N/A"}
-                        </span>
+              <div className="mt-5 border-t border-slate-200 pt-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Latest Set Feedback
+                    </p>
+                    <h4 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">
+                      {isEndingSet
+                        ? "Generating feedback"
+                        : latestCompletedSet
+                          ? `${formatExerciseName(latestCompletedSet.exercise)} set ${
+                              latestCompletedSet.set_number
+                            }`
+                          : "No set feedback yet"}
+                    </h4>
+                  </div>
+                  {latestCompletedSet ? (
+                    <div className="grid min-w-72 grid-cols-3 gap-2 text-sm">
+                      <div className="rounded-xl bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] text-slate-500">Reps</p>
+                        <p className="font-semibold text-slate-950">
+                          {latestCompletedSet.reps ?? "N/A"}
+                        </p>
                       </div>
-
-                      <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
-                        <div>
-                          <p className="text-xs text-slate-500">Reps</p>
-                          <p className="font-semibold text-slate-950">
-                            {set.reps ?? "N/A"}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500">Bad reps</p>
-                          <p className="font-semibold text-slate-950">
-                            {set.bad_reps ?? "N/A"}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500">Angles</p>
-                          <p className="font-semibold text-slate-950">
-                            {formatSetValue(set.angle_data)}
-                          </p>
-                        </div>
+                      <div className="rounded-xl bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] text-slate-500">Bad reps</p>
+                        <p className="font-semibold text-slate-950">
+                          {latestCompletedSet.bad_reps ?? "N/A"}
+                        </p>
                       </div>
-
-                      <p className="mt-4 text-sm leading-6 text-slate-700">
-                        {set.coaching_summary ?? "Waiting for set feedback."}
-                      </p>
-                    </article>
-                  ))}
+                      <div className="rounded-xl bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] text-slate-500">Score</p>
+                        <p className="font-semibold text-slate-950">
+                          {latestCompletedSet.form_score ?? "N/A"}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
+                <p className="mt-3 text-sm leading-6 text-slate-700">
+                  {isEndingSet
+                    ? "Waiting for the Pi to finish the set and return coaching."
+                    : latestCompletedSet?.coaching_summary ??
+                      "End a set to see the coach feedback here."}
+                </p>
               </div>
-            ) : null}
+            </div>
 
             {selectedWorkout ? (
               <div className="grid gap-4 lg:grid-cols-[0.72fr_1.28fr]">
                 <aside className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-3 px-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Sessions
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">
+                      History
+                    </h3>
+                  </div>
                   <div className="space-y-2">
                     {dashboardData.recentWorkouts.map((session) => {
                       const isActive = session.id === selectedWorkout.id;
+                      const sessionSets = dashboardData.recentSets.filter(
+                        (set) => set.external_session_id === session.external_session_id
+                      );
 
                       return (
                         <button
@@ -499,9 +502,20 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                               : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
                           }`}
                         >
-                          <p className="font-medium capitalize">
-                            {formatExerciseName(session.exercise)}
-                          </p>
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="font-medium capitalize">
+                              {formatExerciseName(session.exercise)}
+                            </p>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs ${
+                                isActive
+                                  ? "bg-white/15 text-white"
+                                  : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              {session.sets ?? sessionSets.length} sets
+                            </span>
+                          </div>
                           <p
                             className={`mt-1 text-sm ${
                               isActive ? "text-slate-200" : "text-slate-500"
@@ -510,6 +524,14 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                             {session.ended_at
                               ? new Date(session.ended_at).toLocaleString()
                               : "Not captured"}
+                          </p>
+                          <p
+                            className={`mt-2 text-xs ${
+                              isActive ? "text-slate-300" : "text-slate-500"
+                            }`}
+                          >
+                            Reps {formatWorkoutValue(session.reps_per_set)} · Score{" "}
+                            {session.form_score ?? "N/A"}
                           </p>
                         </button>
                       );
@@ -563,13 +585,56 @@ export function DashboardShell({ initialData }: { initialData: DashboardData }) 
                     </div>
                   </div>
 
-                  <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="mt-6 border-t border-slate-200 pt-5">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Coaching
+                      Overall Coaching
                     </p>
                     <p className="mt-3 text-sm leading-6 text-slate-700">
                       {selectedWorkout.coaching_summary ?? "No coaching summary captured yet."}
                     </p>
+                  </div>
+
+                  <div className="mt-6 border-t border-slate-200 pt-5">
+                    <div className="flex items-end justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          Sets
+                        </p>
+                        <h4 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">
+                          Set-by-set feedback
+                        </h4>
+                      </div>
+                    </div>
+
+                    {selectedWorkoutSets.length > 0 ? (
+                      <div className="mt-4 divide-y divide-slate-200 border-y border-slate-200">
+                        {selectedWorkoutSets.map((set) => (
+                          <div key={set.id} className="py-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="text-sm font-semibold capitalize text-slate-950">
+                                  Set {set.set_number} · {set.set_status ?? "completed"}
+                                </p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                  {set.reps ?? "N/A"} reps · {set.bad_reps ?? "N/A"} bad ·{" "}
+                                  {formatSetValue(set.angle_data)}
+                                </p>
+                              </div>
+                              <span className="w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                                Score {set.form_score ?? "N/A"}
+                              </span>
+                            </div>
+                            <p className="mt-3 text-sm leading-6 text-slate-700">
+                              {set.coaching_summary ?? "Waiting for set feedback."}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-4 text-sm text-slate-500">
+                        No set details synced for this session yet.
+                      </p>
+                    )}
                   </div>
                 </article>
               </div>
