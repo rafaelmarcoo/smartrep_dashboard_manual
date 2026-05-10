@@ -16,6 +16,14 @@ DASHBOARD_API_BASE_URL = os.getenv("DASHBOARD_API_BASE_URL", "http://localhost:3
 COMMAND_POLL_SECONDS = float(os.getenv("COMMAND_POLL_SECONDS", "0.35"))
 SET_COUNTDOWN_SECONDS = int(os.getenv("SET_COUNTDOWN_SECONDS", "3"))
 
+# Camera / pose tracking
+CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "0"))
+CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", "640"))
+CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
+CAMERA_FPS = int(os.getenv("CAMERA_FPS", "30"))
+CAMERA_BUFFER_SIZE = int(os.getenv("CAMERA_BUFFER_SIZE", "1"))
+POSE_PROCESS_EVERY_N_FRAMES = max(1, int(os.getenv("POSE_PROCESS_EVERY_N_FRAMES", "2")))
+
 #Equipment Name
 DUMBBELL_LEFT = "dumbbell_left"
 DUMBBELL_RIGHT = "dumbbell_right"
