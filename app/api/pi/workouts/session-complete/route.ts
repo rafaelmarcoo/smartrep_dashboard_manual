@@ -65,12 +65,7 @@ export async function POST(request: Request) {
     let thingsboardPublished = true;
     try {
       await publishServerTelemetry({
-        coaching_summary: coachingSummary,
-        latest_session_ai_feedback: coachingSummary,
-        latest_session_coaching_summary: coachingSummary,
-        latest_session_id: payload.external_session_id,
-        latest_session_exercise: payload.exercise,
-        latest_session_feedback_at: endedAt,
+        overall_session_workout_summary: coachingSummary,
       });
     } catch (publishError) {
       thingsboardPublished = false;

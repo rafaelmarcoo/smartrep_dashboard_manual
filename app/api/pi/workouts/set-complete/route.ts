@@ -70,11 +70,6 @@ export async function POST(request: Request) {
     try {
       await publishServerTelemetry({
         latest_set_ai_feedback: coachingSummary,
-        latest_set_coaching_summary: coachingSummary,
-        latest_set_id: payload.external_set_id,
-        latest_set_number: payload.set_number ?? null,
-        latest_set_exercise: payload.exercise,
-        latest_set_feedback_at: endedAt,
       });
     } catch (publishError) {
       thingsboardPublished = false;
