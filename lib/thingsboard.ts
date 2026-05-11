@@ -2,6 +2,16 @@ const TB_BASE_URL = process.env.TB_BASE_URL!;
 const TB_API_KEY = process.env.TB_API_KEY!;
 const TB_PI1_DEVICE_ID = process.env.TB_PI1_DEVICE_ID!;
 
+type ThingsBoardTelemetryValue =
+  | string
+  | number
+  | boolean
+  | null
+  | Record<string, unknown>
+  | unknown[];
+
+type ThingsBoardTelemetryPayload = Record<string, ThingsBoardTelemetryValue>;
+
 const SESSION_EVENT_KEYS = [
   "event",
   "equipment",
@@ -97,6 +107,34 @@ export async function getHistoricalWorkoutEvents(startTs: number, endTs: number)
   }
 
   return res.json();
+}
+
+export async function publishServerTelemetry(
+  payload: ThingsBoardTelemetryPayload,
+  timestampMs = Date.now()
+) {
+  if (!TB_BASE_URL || !TB_API_KEY || !TB_PI1_DEVICE_ID) {
+    throw new Error("ThingsBoard telemetry publish is missing TB_BASE_URL, TB_API_KEY, or TB_PI1_DEVICE_ID.");
+  }
+
+  const url =
+    `${TB_BASE_URL}/api/plugins/telemetry/DEVICE/${TB_PI1_DEVICE_ID}` +
+    "/timeseries/SERVER_SCOPE";
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: tbHeaders(),
+    cache: "no-store",
+    body: JSON.stringify({
+      ts: timestampMs,
+      values: payload,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`ThingsBoard telemetry publish failed: ${res.status} ${text}`);
+  }
 }
 
 export function getPi1DeviceId() {
