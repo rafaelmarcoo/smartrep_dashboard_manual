@@ -4,15 +4,14 @@ from datetime import datetime
 import cv2
 import mediapipe as mp
 import numpy as np
+from mqtt_client import publish
 
 from config import (
     CAMERA_BUFFER_SIZE,
     CAMERA_FPS,
-    CAMERA_FOURCC,
     CAMERA_HEIGHT,
     CAMERA_INDEX,
     CAMERA_WIDTH,
-    POSE_FRAME_WIDTH,
     POSE_PROCESS_EVERY_N_FRAMES,
     SET_COUNTDOWN_SECONDS,
 )
@@ -271,9 +270,6 @@ class ManualWorkoutTracker:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
-        if CAMERA_FOURCC:
-            fourcc = cv2.VideoWriter_fourcc(*CAMERA_FOURCC[:4])
-            self.cap.set(cv2.CAP_PROP_FOURCC, fourcc)
 
         self.session = None
         self.active_set = None
@@ -333,9 +329,15 @@ class ManualWorkoutTracker:
             "bad_reps": bad_reps,
             "form_score": score_form(bad_reps, reps),
             "angle_data": state["angle_data"],
-            "started_at": self.active_set["started_at"],
-            "ended_at": ended_at,
+            "set_started_at": self.active_set["started_at"],
+            "set_ended_at": ended_at,
+            "current_rep_count": '(No active session)',
+            "current_angle_data": '(No active session)',
+            "current_exercise_type": '(No active session)',
+            "current_session_id": '(No active session)'
         }
+
+        publish(payload);
 
         self.active_set["status"] = "processing_feedback"
         self.active_set["completed_payload"] = payload
@@ -369,11 +371,18 @@ class ManualWorkoutTracker:
             "exercise": self.session["exercise"],
             "sets": len(self.completed_sets),
             "reps_per_set": [item["reps"] for item in self.completed_sets],
-            "bad_reps": total_bad_reps,
+            "total_bad_reps": total_bad_reps,
             "form_score": average_score,
-            "started_at": self.session["started_at"],
-            "ended_at": datetime.utcnow().isoformat(),
+            "session_started_at": self.session["started_at"],
+            "session_ended_at": datetime.utcnow().isoformat(),
+            "current_rep_count": '(No active session)',
+            "current_angle_data": '(No active session)',
+            "current_exercise_type": '(No active session)',
+            "current_session_id": '(No active session)'
+            
         }
+
+        publish(payload);
 
         print(f"Manual workout session ended: {self.session['external_session_id']}")
         self.session = None
@@ -431,16 +440,7 @@ class ManualWorkoutTracker:
         return (cv2.waitKey(1) & 0xFF) != ord("q")
 
     def _process_active_frame(self, frame):
-        pose_frame = frame
-        if POSE_FRAME_WIDTH > 0 and frame.shape[1] > POSE_FRAME_WIDTH:
-            scale = POSE_FRAME_WIDTH / frame.shape[1]
-            pose_frame = cv2.resize(
-                frame,
-                (POSE_FRAME_WIDTH, int(frame.shape[0] * scale)),
-                interpolation=cv2.INTER_AREA,
-            )
-
-        image = cv2.cvtColor(pose_frame, cv2.COLOR_BGR2RGB)
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image.flags.writeable = False
         results = pose.process(image)
         if not results.pose_landmarks:
@@ -460,9 +460,18 @@ class ManualWorkoutTracker:
             return
 
         self.last_overlay_text = (
-            f"Set {self.active_set['set_number']}  Reps {state['current_reps']}"
+            f"Reps: {state['current_reps']} Angle: {angle:.0f} Stage: {state['stage'] or '-'}"
         )
         self._draw_overlay(frame, self.last_overlay_text)
+        
+        payload = {
+            "current_rep_count": state['current_reps'],
+            "current_angle_data": angle,
+            "current_exercise_type": self.session["exercise"],
+            "current_session_id": self.active_set["external_set_id"]
+        }
+
+        publish(payload);
 
     def _draw_overlay(self, frame, text):
         cv2.putText(
