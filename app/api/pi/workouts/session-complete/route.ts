@@ -1,5 +1,6 @@
 import { generateWorkoutCoaching } from "@/lib/ai-coaching";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { publishServerTelemetry } from "@/lib/thingsboard";
 
 type SessionCompletePayload = {
   external_session_id?: string;
@@ -61,7 +62,26 @@ export async function POST(request: Request) {
 
     if (error) throw error;
 
-    return Response.json({ ok: true, coaching_summary: coachingSummary });
+    let thingsboardPublished = true;
+    try {
+      await publishServerTelemetry({
+        coaching_summary: coachingSummary,
+        latest_session_ai_feedback: coachingSummary,
+        latest_session_coaching_summary: coachingSummary,
+        latest_session_id: payload.external_session_id,
+        latest_session_exercise: payload.exercise,
+        latest_session_feedback_at: endedAt,
+      });
+    } catch (publishError) {
+      thingsboardPublished = false;
+      console.error("Session feedback ThingsBoard publish failed:", publishError);
+    }
+
+    return Response.json({
+      ok: true,
+      coaching_summary: coachingSummary,
+      thingsboard_published: thingsboardPublished,
+    });
   } catch (error) {
     console.error(error);
     return Response.json(
